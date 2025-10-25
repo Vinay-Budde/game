@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Classic Nokia Snake — Single File</title>
+<style>
+  :root{
+    --bg:#0b0b0b; --panel:#111; --accent:#c7ff66; --muted:#9aa39a;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(180deg,#060606 0%, #0d0d12 100%);
+    color:var(--accent);
+    font-family: "Segoe UI", Roboto, system-ui, -apple-system, Arial;
+    padding:18px;
+  }
+  .wrap{width:min(420px,96vw); display:flex; flex-direction:column; align-items:center; gap:12px}
+  h1{margin:0; font-size:20px; letter-spacing:1px; color:var(--accent)}
+  .panel{width:100%; background:var(--panel); border-radius:10px; padding:10px; box-shadow:0 8px 30px rgba(0,0,0,.6); border:1px solid rgba(255,255,255,.03)}
+  .hud{display:flex; gap:8px; align-items:center; justify-content:space-between; font-weight:700; font-size:14px}
+  .hud .item{background:rgba(255,255,255,.02); padding:6px 10px; border-radius:6px; color:var(--accent); display:inline-flex; gap:8px; align-items:center}
+  canvas{display:block; width:100%; height:auto; background:#f3f3e6; border-radius:8px; box-shadow:inset 0 0 0 6px #0b0b0b}
+  .controls{display:flex; gap:8px; justify-content:center; margin-top:8px}
+  button.btn{background:transparent; border:1px solid rgba(255,255,255,.06); color:var(--accent); padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700}
+  button.btn:active{transform:translateY(1px)}
+  .mobile-ctl{display:flex; gap:6px; justify-content:center; margin-top:8px}
+  .ctl{width:56px;height:56px;border-radius:8px;border:1px solid rgba(255,255,255,.06); display:grid;place-items:center;background:rgba(0,0,0,.03);font-weight:800; cursor:pointer}
+  .note{color:var(--muted); font-size:13px; text-align:center; margin-top:6px}
+  /* overlays */
+  .overlay{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.6); z-index:40}
+  .card{background:#0b0b0b; padding:18px; border-radius:10px; width:min(420px,94vw); border:1px solid rgba(255,255,255,.04)}
+  .card h2{margin:0 0 8px; color:var(--accent)}
+  .flex-row{display:flex; gap:8px; flex-wrap:wrap}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Classic Nokia Snake</h1>
+
+    <div class="panel">
+      <div class="hud" style="margin-bottom:8px">
+        <div class="item">Score: <span id="score">0</span></div>
+        <div class="item">Best: <span id="best">0</span></div>
+        <div class="item">Speed: <span id="spd">1.0x</span></div>
+        <div style="margin-left:auto"><button id="pauseBtn" class="btn">⏸ Pause</button></div>
+      </div>
+
+      <!-- Canvas: 20x20 tiles * 20px = 400 -->
+      <canvas id="board" width="400" height="400" aria-label="Game board"></canvas>
+
+      <div class="controls">
+        <button class="btn" id="startBtn">▶ Start</button>
+        <button class="btn" id="restartBtn">↻ Restart</button>
+        <button class="btn" id="modeEasy">🐢 Easy</button>
+        <button class="btn" id="modeNormal">⚡ Normal</button>
+        <button class="btn" id="modeHard">🚀 Hard</button>
+      </div>
+
+      <div class="mobile-ctl" aria-hidden="false" style="margin-top:10px; justify-content:center">
+        <div class="ctl" id="up">▲</div>
+      </div>
+      <div class="mobile-ctl" style="justify-content:center">
+        <div class="ctl" id="left">◀</div>
+        <div class="ctl" id="down">▼</div>
+        <div class="ctl" id="right">▶</div>
+      </div>
+
+      <div class="note">Use Arrow keys or WASD. Space = Pause. Walls are deadly (no wrap). High score saved locally.</div>
+    </div>
+  </div>
+
+<script>
+/* ===== Classic Nokia Snake — single-file =====
+   Grid-based, tile movement, walls kill, speed up.
+   Author: generated for you.
+*/
+
+/* ===== Config ===== */
+const TILE = 20;                // pixels per tile
+const COLS = 20, ROWS = 20;     // 20x20 grid => 400x400 canvas
+const CANVAS_PX = TILE * COLS;
+const BASE_SPEED = 6;           // moves per second (normal)
+const EASY_SPEED = 4;
+const HARD_SPEED = 9;
+const SPEED_INCREASE_AFTER = 4; // every N food, speed += 0.8
+
+/* ===== Canvas setup ===== */
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+/* ===== HUD ===== */
+const scoreEl = document.getElementById('score');
+const bestEl  = document.getElementById('best');
+const spdEl   = document.getElementById('spd');
+const pauseBtn = document.getElementById('pauseBtn');
+
+let best = Number(localStorage.getItem('nokia-snake-best') || 0);
+bestEl.textContent = best;
+
+/* ===== Game state ===== */
+let snake, dir, queuedDir, food, score, speed, running, paused, gameLoopId, lastTick;
+let moveInterval; // seconds per move
+
+function resetState(){
+  // start with length 3
+  const midX = Math.floor(COLS/2), midY = Math.floor(ROWS/2);
+  snake = [ {x:midX-1,y:midY}, {x:midX,y:midY}, {x:midX+1,y:midY} ];
+  dir = {x:1,y:0}; queuedDir = {x:1,y:0};
+  food = spawnFood();
+  score = 0; updateHUD();
+  paused = false; running = false; gameLoopId = null;
+}
+
+function spawnFood(){
+  while(true){
+    const x = Math.floor(Math.random()*COLS);
+    const y = Math.floor(Math.random()*ROWS);
+    if(!snake.some(s => s.x===x && s.y===y)) return {x,y};
+  }
+}
+
+/* ===== Input handling ===== */
+function setDir(x,y){
+  // prevent reversing directly
+  if(x === -dir.x && y === -dir.y) return;
+  queuedDir = {x,y};
+}
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if(k === 'arrowup' || k==='w') setDir(0,-1);
+  else if(k === 'arrowdown' || k==='s') setDir(0,1);
+  else if(k === 'arrowleft' || k==='a') setDir(-1,0);
+  else if(k === 'arrowright' || k==='d') setDir(1,0);
+  else if(k === ' ') togglePause();
+  else if(k === 'enter' && !running) startGame(BASE_SPEED);
+});
+
+/* Mobile buttons */
+document.getElementById('up').addEventListener('click', ()=>setDir(0,-1));
+document.getElementById('down').addEventListener('click', ()=>setDir(0,1));
+document.getElementById('left').addEventListener('click', ()=>setDir(-1,0));
+document.getElementById('right').addEventListener('click', ()=>setDir(1,0));
+
+/* Buttons */
+document.getElementById('startBtn').addEventListener('click', ()=>startGame(BASE_SPEED));
+document.getElementById('restartBtn').addEventListener('click', ()=>{ stopGame(); resetState(); draw(); });
+document.getElementById('modeEasy').addEventListener('click', ()=>startGame(EASY_SPEED));
+document.getElementById('modeNormal').addEventListener('click', ()=>startGame(BASE_SPEED));
+document.getElementById('modeHard').addEventListener('click', ()=>startGame(HARD_SPEED));
+pauseBtn.addEventListener('click', togglePause);
+
+/* ===== Audio (simple beeps) ===== */
+const audioCtx = (typeof AudioContext !== 'undefined') ? new AudioContext() : null;
+function beep(freq=440,dur=0.06){
+  if(!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.connect(g); g.connect(audioCtx.destination);
+  o.type = 'square'; o.frequency.value = freq;
+  g.gain.value = 0.06;
+  o.start();
+  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+  o.stop(audioCtx.currentTime + dur + 0.02);
+}
+
+/* ===== Game loop (fixed-step) ===== */
+function startGame(initialSpeed){
+  speed = initialSpeed;
+  moveInterval = 1 / speed;
+  fpsReset();
+  if(!snake) resetState();
+  running = true;
+  paused = false;
+  lastTick = performance.now();
+  scheduleTick();
+  updateHUD();
+}
+
+function stopGame(){
+  running = false;
+  if(gameLoopId !== null){ cancelAnimationFrame(gameLoopId); gameLoopId = null; }
+}
+
+function togglePause(){
+  if(!running) return;
+  paused = !paused;
+  pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  if(!paused){
+    lastTick = performance.now();
+    scheduleTick();
+  }
+}
+
+/* tick scheduler using requestAnimationFrame but fixed-step moves */
+function scheduleTick(){
+  gameLoopId = requestAnimationFrame(frame);
+}
+
+function frame(now){
+  if(!running || paused) return;
+  const elapsed = (now - lastTick)/1000;
+  if(elapsed >= moveInterval){
+    // possibly advance multiple steps if lag occurred
+    const steps = Math.floor(elapsed / moveInterval);
+    for(let i=0;i<steps;i++) {
+      step();
+      if(!running) break; // stop early on game over
+    }
+    lastTick = now;
+  }
+  draw();
+  if(running) scheduleTick();
+}
+
+/* ===== Game logic step ===== */
+function step(){
+  // apply queued direction
+  dir = queuedDir;
+
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+  // wall collision (no wrap)
+  if(head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS){
+    return finish();
+  }
+  // self collision
+  if(snake.some((s,idx) => idx>0 && s.x===head.x && s.y===head.y)){
+    return finish();
+  }
+
+  snake.unshift(head);
+
+  // eat food?
+  if(head.x === food.x && head.y === food.y){
+    score++;
+    beep(800,0.06);
+    food = spawnFood();
+    // increase speed every few food
+    if(score % SPEED_INCREASE_AFTER === 0){
+      speed = +(speed + 0.8).toFixed(2);
+      moveInterval = 1/speed;
+      spdEl.textContent = (speed/BASE_SPEED).toFixed(2) + 'x';
+    }
+    updateHUD();
+  } else {
+    snake.pop();
+  }
+}
+
+/* ===== Game over ===== */
+function finish(){
+  running = false;
+  beep(200,0.18);
+  // update best
+  if(score > best){
+    best = score;
+    localStorage.setItem('nokia-snake-best', best);
+    bestEl.textContent = best;
+  }
+  // show small alert and auto-reset after short delay
+  setTimeout(()=> {
+    alert('Game Over — Score: ' + score + '\\nPress Start to play again.');
+    resetState();
+    draw();
+  }, 50);
+}
+
+/* ===== Draw (pixel-block style) ===== */
+function draw(){
+  // clear board (light background to emulate Nokia green)
+  ctx.fillStyle = '#f3f3e6'; // pale background
+  ctx.fillRect(0,0,CANVAS_PX,CANVAS_PX);
+
+  // draw grid (subtle)
+  ctx.strokeStyle = '#d7d7c3';
+  ctx.lineWidth = 1;
+  for(let x=0;x<=COLS;x++){
+    ctx.beginPath(); ctx.moveTo(x*TILE,0); ctx.lineTo(x*TILE,CANVAS_PX); ctx.stroke();
+  }
+  for(let y=0;y<=ROWS;y++){
+    ctx.beginPath(); ctx.moveTo(0,y*TILE); ctx.lineTo(CANVAS_PX,y*TILE); ctx.stroke();
+  }
+
+  // draw food (dark green block)
+  ctx.fillStyle = '#0b7a00'; // food color
+  ctx.fillRect(food.x*TILE + 2, food.y*TILE + 2, TILE - 4, TILE - 4);
+
+  // draw snake (classic square blocks; head slightly brighter)
+  for(let i=0;i<snake.length;i++){
+    const s = snake[i];
+    if(i===0) ctx.fillStyle = '#005500'; // head
+    else ctx.fillStyle = '#007700';      // body
+    ctx.fillRect(s.x*TILE + 1, s.y*TILE + 1, TILE - 2, TILE - 2);
+  }
+}
+
+/* ===== HUD update ===== */
+function updateHUD(){
+  scoreEl.textContent = score;
+  bestEl.textContent = best;
+  spdEl.textContent = (speed/BASE_SPEED).toFixed(2) + 'x';
+}
+
+/* ===== utility: small fps reset to ensure timer consistency ===== */
+function fpsReset(){ lastTick = performance.now(); moveInterval = 1/speed; }
+
+/* ===== init ===== */
+resetState();
+draw();
+
+/* Prewarm audio context on first user gesture for browsers that block autoplay */
+['click','keydown','touchstart'].forEach(ev=>{
+  window.addEventListener(ev, function once(){ if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); window.removeEventListener(ev,once); });
+});
+</script>
+</body>
+</html>
